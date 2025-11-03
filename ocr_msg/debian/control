@@ -1,0 +1,12 @@
+Source: ros-jazzy-ocr-msg
+Section: misc
+Priority: optional
+Maintainer: Chaochen Liang <chalia@qti.qualcomm.com>
+Build-Depends: debhelper-compat ( =13 ), ros-jazzy-ament-cmake, ros-jazzy-ament-lint-auto <!nocheck>, ros-jazzy-ament-lint-common <!nocheck>, ros-jazzy-rosidl-default-generators, ros-jazzy-std-msgs
+Homepage: 
+Standards-Version: 3.9.2
+
+Package: ros-jazzy-ocr-msg
+Architecture: any
+Depends:${misc:Depends},ros-jazzy-std-msgs 
+Description: ocr service msg package

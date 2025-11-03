@@ -1,0 +1,12 @@
+Source: ros-jazzy-ocr-service
+Section: misc
+Priority: optional
+Maintainer: Chaochen Liang <chalia@qti.qualcomm.com>
+Build-Depends: debhelper-compat ( =13 ), python3-pytest <!nocheck>, ros-jazzy-example-interfaces, ros-jazzy-ocr-msg, python3-setuptools, dh-python
+Homepage: 
+Standards-Version: 3.9.2
+
+Package: ros-jazzy-ocr-service
+Architecture: any
+Depends: ${python3:Depends}, ${misc:Depends}, ros-jazzy-example-interfaces, ros-jazzy-ocr-msg, python3-opencv, python-is-python3, tesseract-ocr
+Description: OCR Image process ros2 node
