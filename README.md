@@ -2,9 +2,10 @@
 Here comes the User Guide for OCR Service, it will contain some detail show as below.
 
 - the service definition and it's output and input.
-- how to build this project.
-- how to push binary to device.
+- how to install debian package & dependencies from Ubuntu PPA
 - how to run this project.
+- how to build this project.
+
 
 ## Service
 ### Client
@@ -34,32 +35,24 @@ string image_topic_name
 string ocr_topic_name
 bool success
 ```
-
-Build OCR_Service:
-```bash
-
-cd <QIRP_SDK>
-git clone
-colcon build --merge-install --cmake-args ${CMAKE_ARGS}
+## installation
+Add Qualcomm IOT PPA for Ubuntu
+```
+sudo add-apt-repository ppa:ubuntu-qcom-iot/qcom-ppa
+sudo add-apt-repository ppa:ubuntu-qcom-iot/qirp
+sudo apt update
 
 ```
-
-## Push
-Push OCR_msg OCR_Service and test picture to device:
-
-```bash
-cd install
-tar -zcvf ocr_service.tar.gz include/ lib/ share/
-ssh root@[ip-addr]
-(ssh) mount -o remount rw /
-scp ocr_service.tar.gz root@[ip-addr]:/opt
-ssh ssh root@[ip-addr]
-(ssh) tar --no-overwrite-dir --no-same-owner -zxf /opt/ocr_service.tar.gz -C /usr/
-
-scp  <your pciture> root@[ip-addr]:/opt
+Install Debian package
+```
+sudo apt install ros-jazzy-ocr-service 
+```
+Install python dependency
+```
+pip3 install pytesseract
 ```
 
-## RUN
+## Usage
 Run ocr_service and ocr_testnode on device:
 
 ```bash
@@ -77,6 +70,21 @@ terminal 3:launch ocr_client
 export HOME=/home
 source /opt/ros/jazzy/setup.sh
 ros2 run ocr_service ocr_client  <image_topic>
+```
+
+## Build from source
+
+### Dependencies
+install dependencies:
+```
+apt install ros-jazzy-example-interfaces, ros-jazzy-ocr-msg, python3-setuptools
+```
+Build OCR_Service:
+```bash
+
+git clone https://github.com/qualcomm-qrb-ros/ocr_service.git
+colcon build 
+
 ```
 
 ## License
