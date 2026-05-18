@@ -1,0 +1,59 @@
+name: Package Build PR Check
+
+ ------------------------------------------------------------------------------
+# Overview
+# ------------------------------------------------------------------------------
+# This workflow runs in the upstream source repository when a PR is opened or updated.
+# Its purpose is to ensure that incoming changes will not break the associated
+# Debian package built in a separate packaging repository.
+#
+# ------------------------------------------------------------------------------
+# Required Repository Variable
+# ------------------------------------------------------------------------------
+# PKG_REPO_GITHUB_NAME (Repository variable)
+#
+# Description:
+#   The GitHub repository name of the packaging repo associated with this upstream.
+#
+# Example:
+#   PKG_REPO_GITHUB_NAME = qualcomm-linux/qcom-foo-pkg
+#
+# ------------------------------------------------------------------------------
+# Workflow Behavior
+# ------------------------------------------------------------------------------
+# 1. Triggered on PR events (ready_for_review, synchronize)
+# 2. Retrieves upstream PR source information
+# 3. Invokes reusable workflow from qcom-build-utils
+# 4. Triggers a full package build in the packaging repo
+# 5. Validates whether the PR would break packaging in the main release branch
+#
+# This enables cross-repo CI validation:
+# upstream source change → packaging repo build → integration validation
+# ------------------------------------------------------------------------------
+
+on:
+  pull_request_target:
+    branches: [ main, development ]
+    types:
+      - ready_for_review
+      - synchronize
+    paths-ignore:
+      - '.github/**'
+
+permissions:
+ contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  package-build-pr-check:
+    uses: qualcomm-linux/qcom-build-utils/.github/workflows/qcom-upstream-pr-pkg-build-reusable-workflow.yml@main
+    with:
+      qcom-build-utils-ref: main
+      upstream-repo: ${{ github.event.pull_request.head.repo.full_name }}
+      upstream-repo-ref: ${{ github.event.pull_request.head.ref }}
+      pkg-repo: ${{vars.PKG_REPO_GITHUB_NAME}}
+      pr-number: ${{github.event.pull_request.number}}
+    secrets: inherit
