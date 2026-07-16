@@ -3,144 +3,209 @@ Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause-Clear
 '''
 
-from ocr_msg.srv import OcrRequest
-from std_msgs.msg import String
-import rclpy
-from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor
-from std_srvs.srv import Empty
+import asyncio
 import time
-import threading
 
-from pytesseract import Output
-import pytesseract
 import cv2
-from numpy import *
-from PIL import Image
-import os, sys, time
-import numpy as np
+import pytesseract
 import rclpy
-from rclpy.node import Node
-from cv_bridge import CvBridge, CvBridgeError
+from cv_bridge import CvBridge
+from ocr_msg.srv import OcrRequest
+from rclpy.experimental import AsyncNode
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 
 
-screenLevels = 255.0
-Debug = False
-bridge = CvBridge()
+DEFAULT_MAX_CONCURRENT_OCR = 2
+DEFAULT_TOPIC_IDLE_TIMEOUT_SEC = 30.0
+DEFAULT_CLEANUP_PERIOD_SEC = 5.0
+DEFAULT_DROP_FRAMES_WHEN_BUSY = True
 
-nodes = {}
 
-class OcrProcess(Node):
-    def __init__(self ,name,image_node):
-        super().__init__(name)
-        self.check_image_node_alive(image_node)
-        self.create_subscription(Image, image_node, self.get_res, 10)
-        self.publisher = self.create_publisher(String, image_node+"_ocr", 10)
-        self.get_logger().info("init image Subscriber %s" % name)
-        #self.timer = threading.Timer(10.0, self.timer_callback)
-        #self.timer.start()
-
-    def process_function(self,msg):
-        #self.get_logger().info('I heard: "%s"' % msg.data)
-        # Reset the timer every time a message is received
-        self.get_res(msg.data)
-        self.timer.cancel()
-        self.timer = threading.Timer(10.0, self.timer_callback)
-        self.timer.start()
-
-    def timer_callback(self):
-        self.get_logger().info('No message received in the last 10 seconds, shutting down')
-        self.destroy_node()
-
-    def check_image_node_alive(self,topic_name):
-        while True:
-            topics = self.get_topic_names_and_types()
-            print(topics)
-            #self.get_logger().info("Topic %s exist" % topic_name)
-            if any(topic == topic_name for topic, types in topics):
-                self.get_logger().info("Topic %s exist" % topic_name)
-                break
-            elif time.time() - self.start_time > 10:
-                self.get_logger().info("Topic %s does not exist after 10 seconds" % topic_name)
-                rclpy.shutdown()
-                break
-            else:
-                time.sleep(0.1)
-
-    def get_res(self ,data):
-        self.get_logger().debug("translate image")
-        #self.timer.cancel()
-        #self.timer = threading.Timer(10.0, self.timer_callback)
-        #self.timer.start()
-        rgb = bridge.imgmsg_to_cv2(data, "rgb8")
-        img = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-
-        if not Debug :
-            results = pytesseract.image_to_string(img)
-            self.get_logger().debug(results)
-            msg = String()
-            msg.data = str(results)
-            self.publisher.publish(msg)
-            self.get_logger().info('Publishing: "%s"' % msg.data)
-            return True
-        else :
-            results = pytesseract.image_to_data(img, output_type=Output.DICT)
-            for i in range(0, len(results["text"])):
-                # extract the bounding box coordinates of the text region from the current result
-                tmp_tl_x = results["left"][i]
-                tmp_tl_y = results["top"][i]
-                tmp_br_x = tmp_tl_x + results["width"][i]
-                tmp_br_y = tmp_tl_y + results["height"][i]
-                tmp_level = results["level"][i]
-                conf = results["conf"][i]
-                text = results["text"][i]
-                if ((tmp_level == 5) and (len(text)>0)):
-                    time.sleep(1)
-                    msg = String()
-                    msg.data = str(str(text))
-                    self.publisher.publish(msg)
-                    self.get_logger().info('Publishing: "%s"' % msg.data)
-
-class OcrService(Node):
-
+class OcrService(AsyncNode):
     def __init__(self):
         super().__init__('ocr_service')
-        self.srv = self.create_service(OcrRequest, 'OcrRequest', self.ocr_process)
 
-    def ocr_process(self, request, response):
-        if len(request.image_node.strip()) == 0 :
-            reponse.success = False
-            reponse.ocr_node = " "
-            self.get_logger().info('Incoming request image Node %s is invaild' % (request.image_node))
+        self.declare_parameter('max_concurrent_ocr', DEFAULT_MAX_CONCURRENT_OCR)
+        self.declare_parameter(
+            'topic_idle_timeout_sec',
+            DEFAULT_TOPIC_IDLE_TIMEOUT_SEC,
+        )
+        self.declare_parameter('cleanup_period_sec', DEFAULT_CLEANUP_PERIOD_SEC)
+        self.declare_parameter(
+            'drop_frames_when_busy',
+            DEFAULT_DROP_FRAMES_WHEN_BUSY,
+        )
+
+        max_concurrent_ocr = self.get_parameter(
+            'max_concurrent_ocr'
+        ).get_parameter_value().integer_value
+        self.topic_idle_timeout_sec = self.get_parameter(
+            'topic_idle_timeout_sec'
+        ).get_parameter_value().double_value
+        cleanup_period_sec = self.get_parameter(
+            'cleanup_period_sec'
+        ).get_parameter_value().double_value
+        self.drop_frames_when_busy = self.get_parameter(
+            'drop_frames_when_busy'
+        ).get_parameter_value().bool_value
+
+        self.bridge = CvBridge()
+        self.processors = {}
+        self.ocr_concurrency = asyncio.Semaphore(max(1, max_concurrent_ocr))
+
+        self.srv = self.create_service(
+            OcrRequest,
+            'OcrRequest',
+            self.handle_ocr_request,
+        )
+        self.cleanup_timer = self.create_timer(
+            max(1.0, cleanup_period_sec),
+            self.cleanup_idle_topics,
+        )
+
+        self.get_logger().info(
+            'OCR service started: '
+            f'max_concurrent_ocr={max(1, max_concurrent_ocr)}, '
+            f'topic_idle_timeout_sec={self.topic_idle_timeout_sec}, '
+            f'drop_frames_when_busy={self.drop_frames_when_busy}'
+        )
+
+    async def handle_ocr_request(self, request, response):
+        image_topic = request.image_node.strip()
+
+        if not image_topic:
+            response.success = False
+            response.ocr_node = ''
+            self.get_logger().error('Empty image topic in OCR request')
             return response
-        response.ocr_node = request.image_node + "_response"
-        node_name = request.image_node + "_ocr"
-        image_node  = request.image_node
 
-        new_thread = threading.Thread(target=self.ocr_process_node, args=(node_name, image_node))
-        new_thread.start()
+        if image_topic not in self.processors:
+            self.add_image_topic(image_topic)
+        else:
+            self.processors[image_topic]['last_request_time'] = time.monotonic()
+
         response.success = True
-        self.get_logger().info('Incoming request image Node %s' % (request.image_node))
+        response.ocr_node = self.processors[image_topic]['output_topic']
+        self.get_logger().info(
+            f'OCR topic active: {image_topic} -> {response.ocr_node}'
+        )
         return response
 
-    def ocr_process_node(self,node_name,image_node):
-        #rclpy.init()
-        node = OcrProcess(node_name,image_node)
-        executor_node = MultiThreadedExecutor()
-        rclpy.spin(node, executor=executor_node)
-        #rclpy.shutdown()
+    def add_image_topic(self, image_topic):
+        output_topic = self.make_output_topic(image_topic)
+        publisher = self.create_publisher(String, output_topic, 10)
+        subscription = self.create_subscription(
+            Image,
+            image_topic,
+            self.make_image_callback(image_topic),
+            10,
+        )
+
+        now = time.monotonic()
+        self.processors[image_topic] = {
+            'subscription': subscription,
+            'publisher': publisher,
+            'output_topic': output_topic,
+            'active_count': 0,
+            'last_message_time': now,
+            'last_request_time': now,
+            'received_count': 0,
+            'published_count': 0,
+            'dropped_count': 0,
+        }
+        self.get_logger().info(f'Registered OCR topic: {image_topic}')
+
+    def make_image_callback(self, image_topic):
+        async def callback(msg):
+            await self.process_image(image_topic, msg)
+
+        return callback
+
+    async def process_image(self, image_topic, msg):
+        processor = self.processors.get(image_topic)
+        if processor is None:
+            return
+
+        processor['last_message_time'] = time.monotonic()
+        processor['received_count'] += 1
+
+        if self.drop_frames_when_busy and processor['active_count'] > 0:
+            processor['dropped_count'] += 1
+            self.get_logger().debug(f'Skip busy OCR topic frame: {image_topic}')
+            return
+
+        processor['active_count'] += 1
+        try:
+            async with self.ocr_concurrency:
+                text = await asyncio.to_thread(self.run_ocr, msg)
+
+            current_processor = self.processors.get(image_topic)
+            if current_processor is None:
+                return
+
+            result = String()
+            result.data = text
+            current_processor['publisher'].publish(result)
+            current_processor['published_count'] += 1
+            self.get_logger().info(
+                'Published OCR result: '
+                f'{image_topic} -> {current_processor["output_topic"]}'
+            )
+        except Exception as error:
+            self.get_logger().error(f'OCR failed for topic {image_topic}: {error}')
+        finally:
+            current_processor = self.processors.get(image_topic)
+            if current_processor is not None:
+                current_processor['active_count'] -= 1
+
+    async def cleanup_idle_topics(self):
+        if self.topic_idle_timeout_sec <= 0:
+            return
+
+        now = time.monotonic()
+        idle_topics = []
+        for image_topic, processor in self.processors.items():
+            if processor['active_count'] > 0:
+                continue
+            if now - processor['last_message_time'] >= self.topic_idle_timeout_sec:
+                idle_topics.append(image_topic)
+
+        for image_topic in idle_topics:
+            self.remove_image_topic(image_topic)
+
+    def remove_image_topic(self, image_topic):
+        processor = self.processors.pop(image_topic, None)
+        if processor is None:
+            return
+
+        self.destroy_subscription(processor['subscription'])
+        self.destroy_publisher(processor['publisher'])
+        self.get_logger().info(
+            'Removed idle OCR topic: '
+            f'{image_topic} -> {processor["output_topic"]}, '
+            f'received={processor["received_count"]}, '
+            f'published={processor["published_count"]}, '
+            f'dropped={processor["dropped_count"]}'
+        )
+
+    def run_ocr(self, msg):
+        rgb = self.bridge.imgmsg_to_cv2(msg, 'rgb8')
+        img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        return pytesseract.image_to_string(img)
+
+    def make_output_topic(self, image_topic):
+        return f'{image_topic.rstrip("/")}_ocr'
 
 
+async def async_main():
+    with rclpy.init():
+        node = OcrService()
+        await node.run()
 
-def main(args=None):
-    rclpy.init(args=args)
 
-    ocr_service = OcrService()
-    executor = MultiThreadedExecutor()
-    rclpy.spin(ocr_service, executor=executor)
-    ocr_service.destroy_node()
-    rclpy.shutdown()
+def main():
+    asyncio.run(async_main())
 
 
 if __name__ == '__main__':

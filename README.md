@@ -113,6 +113,20 @@ source /opt/ros/jazzy/setup.bash
 ros2 run ocr_service ocr_server
 ```
 
+The OCR server can subscribe to multiple image topics at the same time. Each
+requested image topic creates an independent OCR output topic named
+`<image_topic>_ocr`. Idle OCR topics are removed automatically when no image
+input is seen for `topic_idle_timeout_sec` seconds.
+
+```bash
+# Optional: tune OCR concurrency and idle cleanup
+ros2 run ocr_service ocr_server --ros-args \
+  -p max_concurrent_ocr:=2 \
+  -p topic_idle_timeout_sec:=30.0 \
+  -p cleanup_period_sec:=5.0 \
+  -p drop_frames_when_busy:=true
+```
+
 ```bash
 # Terminal 2: launch ocr_testnode
 export HOME=/home
@@ -126,6 +140,10 @@ export HOME=/home
 source /opt/ros/jazzy/setup.sh
 ros2 run ocr_service ocr_client <image_topic>
 ```
+
+The client response contains the OCR result topic for that image topic. For
+example, requesting `/camera/front/image_raw` returns
+`/camera/front/image_raw_ocr`.
 
 ---
 
