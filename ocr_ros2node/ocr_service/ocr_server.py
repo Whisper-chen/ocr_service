@@ -110,8 +110,8 @@ class OcrService(Node):
 
     def ocr_process(self, request, response):
         if len(request.image_node.strip()) == 0 :
-            reponse.success = False
-            reponse.ocr_node = " "
+            response.success = False
+            response.ocr_node = " "
             self.get_logger().info('Incoming request image Node %s is invaild' % (request.image_node))
             return response
         response.ocr_node = request.image_node + "_response"

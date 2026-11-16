@@ -40,7 +40,7 @@ def main(args=None):
                     'Service call failed %r' % (e,))
             else:
                 ocr_client.get_logger().info(
-                    'Result of ocr_request: for %s  %s reponse  %s' %
+                    'Result of ocr_request: for %s  %s response  %s' %
                     (ocr_client.req.image_node, response.success, response.ocr_node))
             break
 
